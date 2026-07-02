@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>Форматтер для Notion</title>
+    <style>
+        body {
+            font-family: -apple-system, 'Segoe UI', sans-serif;
+            padding: 20px;
+            background: #f5f5f7;
+            max-width: 700px;
+            margin: 0 auto;
+        }
+        h3 { margin: 0 0 8px; color: #1d1d1f; }
+        #editor {
+            width: 100%;
+            min-height: 30vh;
+            padding: 15px;
+            box-sizing: border-box;
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #c7c7cc;
+            font-size: 16px;
+            line-height: 1.5;
+            outline: none;
+            margin-bottom: 12px;
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        #editor:empty::before {
+            content: "Вставьте rich‑текст сюда…";
+            color: #8e8e93;
+        }
+        button {
+            padding: 14px 24px;
+            background: #007aff;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 17px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            max-width: 300px;
+            display: block;
+            margin-bottom: 15px;
+        }
+        button:active { background: #0056cc; }
+        #status {
+            font-size: 15px;
+            margin-bottom: 15px;
+        }
+        .success { color: #34c759; }
+        .error { color: #ff3b30; }
+        #fallback {
+            display: none;
+            background: white;
+            border: 1px solid #c7c7cc;
+            border-radius: 12px;
+            padding: 15px;
+            font-size: 16px;
+            line-height: 1.5;
+            -webkit-user-select: text;
+            user-select: text;
+            word-wrap: break-word;
+        }
+        .note {
+            font-size: 13px;
+            color: #8e8e93;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h3>📋 Вставьте rich‑текст</h3>
+    <div id="editor" contenteditable="true"></div>
+    <button id="processBtn">Обработать и скопировать</button>
+    <div id="status"></div>
+    <div id="fallback"></div>
+    <p class="note" id="fallbackNote" style="display:none;">Если копирование не сработало автоматически, выделите текст выше вручную и скопируйте (долгое нажатие → «Select All» → «Copy»).</p>
+
+    <script>
+        (function() {
+            const editor = document.getElementById('editor');
+            const status = document.getElementById('status');
+            const fallback = document.getElementById('fallback');
+            const fallbackNote = document.getElementById('fallbackNote');
+
+            // Нормализация \n в текстовых узлах, кроме pre/code
+            const normalizeTextNodes = (element) => {
+                const walker = document.createTreeWalker(
+                    element,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            let parent = node.parentNode;
+                            while (parent && parent !== element) {
+                                const tag = parent.tagName ? parent.tagName.toLowerCase() : '';
+                                if (tag === 'pre' || tag === 'code') return NodeFilter.FILTER_REJECT;
+                                parent = parent.parentNode;
+                            }
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+                while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    if (node.nodeValue.includes('\n')) {
+                        node.nodeValue = node.nodeValue.replace(/\n/g, ' ');
+                    }
+                }
+            };
+
+            // Оригинальная функция замены пунктуации
+            const replacePunctuation = (element) => {
+                const abbreviations = [
+                    'т\\.о\\.', 'т\\.п\\.', 'т\\.д\\.', 'т\\.е\\.',
+                    'англ\\.', 'см\\.', 'пр\\.', 'сл\\.', '\\d\\.'
+                ];
+                const abbreviationPattern = new RegExp(
+                    `(${abbreviations.join('|')})\\s`, 'g'
+                );
+                const sentenceEndPattern = new RegExp(
+                    `([.!?])\\s+(?!(?:${abbreviations.join('|')})\\s)`, 'g'
+                );
+
+                element.innerHTML = element.innerHTML
+                    .replace(abbreviationPattern, '$1&nbsp;')
+                    .replace(sentenceEndPattern, '$1<br><br>');
+            };
+
+            const removeEmptyBlocks = (container) => {
+                const blocks = container.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li');
+                blocks.forEach(el => {
+                    if (!el.textContent.trim() && el.children.length === 0) {
+                        el.remove();
+                    }
+                });
+            };
+
+            document.getElementById('processBtn').addEventListener('click', () => {
+                const rawHTML = editor.innerHTML;
+                if (!rawHTML.trim()) {
+                    status.textContent = '⚠️ Вставьте текст';
+                    status.className = 'error';
+                    return;
+                }
+
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = rawHTML;
+
+                const blocks = tempDiv.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li');
+                blocks.forEach(block => {
+                    normalizeTextNodes(block);
+                    replacePunctuation(block);
+                });
+                removeEmptyBlocks(tempDiv);
+
+                const finalHTML = tempDiv.innerHTML;
+
+                // Показываем результат на случай, если авто-копирование не сработает
+                fallback.innerHTML = finalHTML;
+                fallback.style.display = 'block';
+                fallbackNote.style.display = 'block';
+
+                // Контролируемое копирование
+                const copyContainer = document.createElement('div');
+                copyContainer.innerHTML = finalHTML;
+                copyContainer.style.position = 'fixed';
+                copyContainer.style.left = '-9999px';
+                document.body.appendChild(copyContainer);
+
+                const range = document.createRange();
+                range.selectNodeContents(copyContainer);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+
+                const onCopy = (e) => {
+                    e.clipboardData.setData('text/html', finalHTML);
+                    e.clipboardData.setData('text/plain', copyContainer.innerText);
+                    e.preventDefault();
+                };
+                document.addEventListener('copy', onCopy, { once: true });
+
+                try {
+                    const success = document.execCommand('copy');
+                    if (success) {
+                        status.textContent = '✅ Скопировано! Вставьте в Notion.';
+                        status.className = 'success';
+                    } else {
+                        status.textContent = '⚠️ Автокопирование запрещено браузером. Скопируйте текст из поля ниже вручную.';
+                        status.className = 'error';
+                    }
+                } catch (e) {
+                    status.textContent = '⚠️ Ошибка копирования. Скопируйте вручную.';
+                    status.className = 'error';
+                } finally {
+                    sel.removeAllRanges();
+                    document.body.removeChild(copyContainer);
+                }
+            });
+        })();
+    </script>
+</body>
+</html>
